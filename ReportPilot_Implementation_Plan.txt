@@ -1,0 +1,1730 @@
+ReportPilot — Master Implementation Plan
+=========================================
+Version: 1.0 — Final
+Stack: NestJS · React + Vite · Google Apps Script · Supabase + Prisma · OpenAI GPT-4 · Google Sheets API
+Repo: Monorepo — /backend /sidebar /addon
+Auth: Google OAuth via Supabase (login + Sheets scope in one flow)
+Deploy: Render free tier + UptimeRobot keep-alive + Supabase
+Target: 6-week MVP → beta with 5–10 users
+
+
+TABLE OF CONTENTS
+-----------------
+1.  Project Architecture
+2.  Monorepo Structure
+3.  Environment Variables
+4.  Database Schema (Prisma)
+5.  Authentication Flow
+6.  Meta API Integration
+7.  Template System
+8.  Import Flow
+9.  Scheduling Engine
+10. AI Insights Engine
+11. Google Apps Script Add-on
+12. React Sidebar (Vite)
+13. API Contract — All Endpoints
+14. Error Handling Standards
+15. Edge Cases — Full List
+16. Week-by-Week Sprint Plan
+17. Pre-Built Templates
+18. TODO — Parked for Later
+19. Before You Write the First Line of Code
+
+
+================================================================================
+1. PROJECT ARCHITECTURE
+================================================================================
+
+WHAT EACH LAYER DOES
+--------------------
+
+NestJS Backend (/backend)
+The core server. Handles all Meta API calls, OpenAI calls, token encryption,
+scheduling cron jobs, Google Sheets API writes, user management, and plan gating.
+Nothing sensitive happens outside this layer. The React sidebar talks to this.
+Apps Script talks to this. This is the source of truth.
+
+React + Vite Sidebar (/sidebar)
+A React app bundled by Vite and served as static files from the NestJS backend
+at /public/sidebar. Apps Script loads this in an iframe inside Google Sheets.
+The sidebar handles all UI — login, Meta connect, template selection, import,
+schedule management, AI insights trigger. It communicates with NestJS via
+JWT-authenticated HTTPS calls. For sheet operations (writing data, reading data),
+it goes through Apps Script as a bridge using google.script.run.
+
+Google Apps Script Add-on (/addon)
+The layer that lives inside Google Sheets. Handles the Extensions menu, sidebar
+loading, reading data from sheet tabs, writing data to sheet tabs, creating and
+naming tabs, applying formatting. Apps Script is the only layer that can directly
+touch the Google Sheet the user has open. No npm packages — pure JavaScript only.
+6-minute execution time limit per run.
+
+Supabase (PostgreSQL via Prisma)
+All persistent data. Users, encrypted Meta tokens, Google refresh tokens,
+templates, schedules, AI reports. Prisma is the ORM — all DB access goes through
+PrismaService. Never write raw SQL. Never access Supabase directly from sidebar
+or Apps Script.
+
+Google Sheets API (Backend)
+Used exclusively by the NestJS scheduling engine to write data into user sheets
+without the user being present. Requires the spreadsheets OAuth scope approved
+by the user at first login. The Google refresh token is stored encrypted in
+the ConnectedAccount table.
+
+DATA FLOW SUMMARY
+-----------------
+
+Manual Import:
+  Sidebar → NestJS /meta/import → Meta API → NestJS parses → returns rows
+  → Sidebar receives rows → google.script.run.writeToSheet → Apps Script writes to sheet
+
+Scheduled Import:
+  NestJS cron fires → loads schedule from DB → calls Meta API
+  → Google Sheets API writes to sheet directly
+
+AI Insights:
+  Sidebar → google.script.run.getSheetData → Apps Script reads sheet
+  → Sidebar sends data to NestJS /ai/generate → NestJS calls OpenAI
+  → Response returns to sidebar → google.script.run.writeToSheet → AI Insights tab written
+
+
+================================================================================
+2. MONOREPO STRUCTURE
+================================================================================
+
+reportpilot/
+├── backend/
+│   ├── src/
+│   │   ├── auth/               Google OAuth + JWT
+│   │   ├── users/              User CRUD, plan management
+│   │   ├── meta/               Meta OAuth + Insights API
+│   │   ├── templates/          Template CRUD
+│   │   ├── schedules/          Schedule management + cron
+│   │   ├── sheets/             Google Sheets API write
+│   │   ├── ai/                 OpenAI GPT-4 integration
+│   │   ├── prisma/             PrismaService (shared)
+│   │   └── common/             Guards, decorators, crypto utils, interceptors
+│   ├── prisma/
+│   │   ├── schema.prisma
+│   │   └── seed.ts             Seeds 5 prebuilt templates for new users
+│   ├── .env                    Never committed
+│   ├── .env.example            Committed — lists all required vars
+│   └── package.json
+│
+├── sidebar/
+│   ├── src/
+│   │   ├── components/         Reusable UI components
+│   │   ├── screens/            One folder per screen
+│   │   ├── hooks/              Data fetching, auth state
+│   │   ├── services/           Axios API calls to NestJS
+│   │   ├── types/              TypeScript interfaces
+│   │   └── utils/              Helpers, formatters
+│   ├── vite.config.ts          Output to ../backend/public/sidebar
+│   └── package.json
+│
+├── addon/
+│   ├── Code.gs                 Menu, sidebar loader, sheet read/write functions
+│   ├── sidebar.html            Loads React sidebar from backend URL
+│   └── appsscript.json         Manifest — scopes, add-on config
+│
+├── docs/
+│   ├── implementation-plan.txt This document
+│   └── schema-diagram.md       DB relationships
+│
+├── .gitignore
+└── README.md
+
+
+================================================================================
+3. ENVIRONMENT VARIABLES
+================================================================================
+
+All stored in backend/.env. Never committed.
+Add every var to .env.example with description but no value.
+
+# Database
+DATABASE_URL=
+  Supabase → Settings → Database → URI (connection pooling URL)
+
+# Supabase
+SUPABASE_URL=
+  Supabase → Settings → API → Project URL
+SUPABASE_ANON_KEY=
+  Supabase → Settings → API → anon public key
+SUPABASE_SERVICE_KEY=
+  Supabase → Settings → API → service_role secret key
+
+# Meta
+META_APP_ID=
+  From Pushpak's Meta developer app
+META_APP_SECRET=
+  From Pushpak's Meta developer app
+META_REDIRECT_URI=
+  https://your-render-url.render.com/meta/callback
+
+# Google
+GOOGLE_CLIENT_ID=
+  Google Cloud Console → OAuth 2.0 → Web client ID
+GOOGLE_CLIENT_SECRET=
+  Google Cloud Console → OAuth 2.0 → Web client secret
+GOOGLE_REDIRECT_URI=
+  https://your-render-url.render.com/auth/google/callback
+
+# OpenAI
+OPENAI_API_KEY=
+  platform.openai.com → API keys
+
+# Security
+JWT_SECRET=
+  Random 64-char string — generate once, never change
+ENCRYPTION_SECRET=
+  Random 32-char string — used for AES-256 token encryption
+
+# App
+BACKEND_URL=
+  https://your-render-url.render.com
+NODE_ENV=
+  development | production
+PORT=
+  3000
+
+
+================================================================================
+4. DATABASE SCHEMA (PRISMA)
+================================================================================
+
+Design all tables in Week 1. Do not add tables mid-sprint.
+
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String             @id @default(uuid())
+  email         String             @unique
+  name          String?
+  googleId      String?            @unique
+  avatarUrl     String?
+  plan          String             @default("free")  // free | pro | agency
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  accounts      ConnectedAccount[]
+  templates     Template[]
+  schedules     Schedule[]
+  aiReports     AiReport[]
+}
+
+model ConnectedAccount {
+  id               String     @id @default(uuid())
+  userId           String
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  metaBmId         String
+  metaBmName       String
+  metaAccountId    String     // e.g. act_123456789
+  metaAccountName  String
+  currency         String     // INR | USD | AED etc.
+  accessToken      String     // AES-256 encrypted Meta long-lived token
+  tokenExpiresAt   DateTime
+  googleRefToken   String?    // AES-256 encrypted Google refresh token
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  schedules        Schedule[]
+
+  @@unique([userId, metaAccountId])
+}
+
+model Template {
+  id              String     @id @default(uuid())
+  userId          String
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  reportLevel     String     // campaign | adset | ad
+  dateGranularity String     // day | week | month
+  dateRange       String     // last_7 | last_30 | this_month | custom
+  metrics         String[]
+  dimensions      String[]
+  columnOrder     String[]
+  sortBy          String?
+  sortDirection   String?    // asc | desc
+  filters         Json?      // [{field, operator, value}]
+  isPrebuilt      Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  schedules       Schedule[]
+}
+
+model Schedule {
+  id              String           @id @default(uuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  templateId      String
+  template        Template         @relation(fields: [templateId], references: [id])
+  accountId       String
+  account         ConnectedAccount @relation(fields: [accountId], references: [id])
+  frequency       String           // daily | weekly | monthly
+  refreshTime     String           // "HH:MM" in user's local timezone
+  timezone        String           // IANA timezone — e.g. "Asia/Kolkata"
+  status          String           @default("active")  // active | paused | disabled
+  sheetId         String
+  sheetTabName    String
+  lastRunAt       DateTime?
+  lastRunStatus   String?          // success | failed
+  lastError       String?
+  nextRunAt       DateTime?
+  retryCount      Int              @default(0)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model AiReport {
+  id             String    @id @default(uuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId      String
+  accountName    String
+  reportData     Json
+  promptUsed     String
+  insightOutput  String
+  feedback       String?   // thumbs_up | thumbs_down
+  createdAt      DateTime  @default(now())
+}
+
+RELATIONSHIPS:
+- One User → many ConnectedAccounts (one per Meta ad account)
+- One User → many Templates
+- One User → many Schedules
+- One Schedule → one Template + one ConnectedAccount
+- One User → many AiReports
+- onDelete: Cascade — deleting a user deletes all their data
+
+
+================================================================================
+5. AUTHENTICATION FLOW
+================================================================================
+
+GOOGLE OAUTH (Login + Sheets Scope — One Flow)
+-----------------------------------------------
+The user logs in with Google once. In this single OAuth flow, we request both the
+login scopes AND the Google Sheets write scope. The user approves everything in
+one screen. We store the Google refresh token encrypted for later Sheets writes.
+
+SCOPES TO REQUEST:
+  openid
+  email
+  profile
+  https://www.googleapis.com/auth/spreadsheets
+
+FLOW:
+1.  Sidebar renders Login screen with Google Sign-In button
+2.  User clicks → sidebar opens popup to GET /auth/google
+3.  NestJS redirects to Google OAuth with all 4 scopes
+    + prompt=consent&access_type=offline
+    prompt=consent forces Google to return a refresh token every time
+    access_type=offline is required to get the refresh token at all
+4.  User approves → Google redirects to GET /auth/google/callback?code=...
+5.  NestJS exchanges code for tokens via Google Token API
+6.  NestJS receives access_token, refresh_token, id_token
+7.  NestJS decodes id_token to get user email, name, googleId, avatarUrl
+8.  NestJS upserts User row in DB (create if new, update if existing)
+9.  NestJS encrypts refresh_token and stores in ConnectedAccount.googleRefToken
+10. NestJS signs a JWT with { userId, email, plan } — expires in 30 days
+11. NestJS returns JWT to sidebar
+12. Sidebar stores JWT in PropertiesService.getUserProperties()
+
+JWT STRUCTURE:
+{
+  "userId": "uuid",
+  "email": "user@example.com",
+  "plan": "free",
+  "iat": 1234567890,
+  "exp": 1234567890
+}
+
+All subsequent API calls:
+  Authorization: Bearer <jwt>
+
+JWT Guard in NestJS:
+Every protected endpoint uses @UseGuards(JwtAuthGuard). The guard verifies the
+JWT, extracts the payload, and attaches it to request.user.
+Use @CurrentUser() decorator to access it in controllers.
+
+
+================================================================================
+6. META API INTEGRATION
+================================================================================
+
+6.1 Meta OAuth Flow (Connecting Ad Account)
+--------------------------------------------
+Separate from Google login. Connects the marketer's Meta Ads account.
+
+SCOPES TO REQUEST:
+  ads_read
+  ads_management
+  business_management
+  read_insights
+
+FLOW:
+1.  Sidebar shows Connect Meta button
+2.  User clicks → sidebar calls GET /meta/auth-url
+3.  NestJS returns the Meta OAuth URL
+4.  Sidebar opens popup to that URL
+5.  User logs in with Facebook and approves permissions
+6.  Meta redirects to GET /meta/callback?code=...
+7.  NestJS exchanges code for short-lived token via:
+    POST https://graph.facebook.com/oauth/access_token
+8.  NestJS exchanges short-lived for long-lived token via:
+    GET https://graph.facebook.com/oauth/access_token
+        ?grant_type=fb_exchange_token&...
+    Long-lived token lasts 60 days
+9.  NestJS encrypts token with AES-256 and stores in ConnectedAccount.accessToken
+10. NestJS stores tokenExpiresAt = now + 60 days
+11. NestJS fetches Business Managers and Ad Accounts, returns to sidebar
+12. Sidebar shows account selector
+
+
+6.2 Token Encryption
+---------------------
+// src/common/crypto.util.ts
+import * as CryptoJS from 'crypto-js';
+
+const SECRET = process.env.ENCRYPTION_SECRET;
+
+export const encrypt = (text: string): string =>
+  CryptoJS.AES.encrypt(text, SECRET).toString();
+
+export const decrypt = (cipher: string): string =>
+  CryptoJS.AES.decrypt(cipher, SECRET).toString(CryptoJS.enc.Utf8);
+
+Never store raw tokens. Always encrypt before saving, decrypt before using.
+
+
+6.3 Token Refresh (Automated)
+------------------------------
+Runs daily at 2 AM via NestJS cron.
+Finds tokens expiring within 7 days and refreshes them.
+
+@Cron('0 2 * * *')
+async refreshExpiringTokens() {
+  const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const accounts = await this.prisma.connectedAccount.findMany({
+    where: { tokenExpiresAt: { lte: sevenDaysFromNow } },
+  });
+  for (const account of accounts) {
+    try {
+      const rawToken = decrypt(account.accessToken);
+      const { token, expiresAt } = await this.refreshMetaToken(rawToken);
+      await this.prisma.connectedAccount.update({
+        where: { id: account.id },
+        data: { accessToken: encrypt(token), tokenExpiresAt: expiresAt },
+      });
+    } catch (err) {
+      // Log failure — do not throw, continue to next account
+    }
+  }
+}
+
+
+6.4 Meta Insights API Call
+---------------------------
+Endpoint:
+  GET https://graph.facebook.com/v18.0/{ad-account-id}/insights
+
+Parameters built from template:
+
+  fields          Built from template.metrics + template.dimensions
+                  Always include: campaign_name, adset_name, ad_name, account_currency
+
+  METRICS MAP:
+    spend           → spend
+    impressions     → impressions
+    reach           → reach
+    clicks          → clicks
+    ctr             → ctr
+    cpc             → cpc
+    cpm             → cpm
+    leads           → actions[action_type=lead]
+    cpl             → cost_per_action_type[action_type=lead]
+    roas            → purchase_roas
+    frequency       → frequency
+    thruplay        → video_thruplay_watched_actions
+    vtr             → calculated: thruplay / impressions * 100
+    cpv             → calculated: spend / thruplays
+
+  time_range      { since: "YYYY-MM-DD", until: "YYYY-MM-DD" }
+  level           campaign | adset | ad (from template.reportLevel)
+  time_increment  1 for day, 7 for week, monthly for month
+  filtering       JSON array from template.filters
+  limit           500 (max per page)
+  access_token    decrypt(account.accessToken)
+
+FOR CREATIVE DATA (confirmed in v1):
+  GET https://graph.facebook.com/v18.0/{ad-account-id}/ads
+  ?fields=id,name,creative{title,body,image_url,thumbnail_url}
+  &limit=500
+  &access_token={token}
+  Merge creative data onto ad-level rows by matching ad.id
+
+PAGINATION:
+  Meta returns max 500 rows per call. Always check data.paging.cursors.after.
+  If present, make another call with &after={cursor} and append results.
+  Repeat until no after cursor.
+
+PERIOD COMPARISON:
+  For every import, also fetch previous period with identical params.
+  Calculate % change: ((current - previous) / previous) * 100
+  Include current value, previous value, and % change in returned data.
+
+
+6.5 NestJS Meta Module Endpoints
+----------------------------------
+GET  /meta/auth-url              Returns Meta OAuth URL for popup
+GET  /meta/callback              Exchanges code, stores token, returns account info
+GET  /meta/accounts              Lists Business Managers for current user
+GET  /meta/ad-accounts?bmId=     Lists ad accounts under a specific BM
+POST /meta/import                Fetches report data using template config
+POST /meta/disconnect            Revokes token, deletes ConnectedAccount row
+
+
+================================================================================
+7. TEMPLATE SYSTEM
+================================================================================
+
+7.1 What a Template Stores
+---------------------------
+name            string      Display name — e.g. "Daily Client Report"
+reportLevel     string      campaign | adset | ad
+dateGranularity string      day | week | month
+dateRange       string      last_7 | last_30 | this_month | custom
+metrics         string[]    Array of metric keys
+dimensions      string[]    Array of dimension keys
+columnOrder     string[]    Ordered list — defines left-to-right column sequence
+sortBy          string?     Field name to sort rows by after import
+sortDirection   string?     asc | desc
+filters         Json?       [{field, operator, value}] passed to Meta API
+isPrebuilt      boolean     true = cannot be deleted by user
+
+
+7.2 Template API Endpoints
+---------------------------
+GET    /templates           List all templates for current user
+POST   /templates           Create new custom template
+GET    /templates/:id       Get single template
+PATCH  /templates/:id       Update template
+DELETE /templates/:id       Delete — reject with 403 if isPrebuilt is true
+
+
+7.3 Pre-Built Templates
+------------------------
+Seeded on first user login. Check for existing templates before seeding.
+
+Daily Performance Report
+  Level: campaign | Granularity: day
+  Columns: Date, Campaign Name, Spend, Impressions, CPM, Clicks, CTR, CPC,
+           ThruPlays, VTR, CPV
+
+Weekly Client Report
+  Level: campaign | Granularity: week
+  Columns: Campaign Name, Spend, Leads, CPL, CTR, CPC, ROAS, Impressions,
+           Reach, vs Last Week %
+
+Lead Generation Report
+  Level: adset | Granularity: week
+  Columns: Campaign Name, Ad Set Name, Spend, Leads, CPL, CPC, CTR, Frequency
+
+Video Performance Report
+  Level: ad | Granularity: day
+  Columns: Ad Name, Ad Creative, Spend, Impressions, Reach, ThruPlays,
+           VTR, CPV, Frequency
+
+Awareness Campaign Report
+  Level: campaign | Granularity: week
+  Columns: Campaign Name, Spend, Impressions, Reach, CPM, Frequency, CTR
+
+
+================================================================================
+8. IMPORT FLOW
+================================================================================
+
+Complete step-by-step sequence when user clicks Import.
+
+1.  Sidebar sends POST /meta/import with:
+    {
+      templateId: "uuid",
+      accountId: "uuid-of-connected-account",
+      dateRange: { since: "2024-06-01", until: "2024-06-07" },
+      prevDateRange: { since: "2024-05-25", until: "2024-05-31" }
+    }
+
+2.  NestJS loads template from DB by templateId
+
+3.  NestJS loads ConnectedAccount by accountId, decrypts accessToken
+
+4.  NestJS builds and executes the Meta Insights API call using template config
+
+5.  NestJS handles pagination — fetches ALL pages before processing
+
+6.  For ad-level reports: NestJS fetches creative data and merges by ad ID
+
+7.  NestJS repeats steps 4-6 for prevDateRange
+
+8.  NestJS calculates % change for each metric between current and previous
+
+9.  NestJS orders columns according to template.columnOrder
+
+10. NestJS applies template.sortBy and template.sortDirection to sort rows
+
+11. NestJS returns structured response:
+    {
+      accountName: "Pushpak Ads",
+      reportLevel: "campaign",
+      headers: ["Campaign Name", "Spend", "Leads", "CPL", "vs Last Week"],
+      rows: [["Lead Gen 25-35", "18400", "184", "100", "+12%"], ...],
+      currency: "INR",
+      dateRange: "Jun 1 – Jun 7, 2024",
+      prevDateRange: "May 25 – May 31, 2024"
+    }
+
+12. Sidebar receives the response
+
+13. Sidebar calls Apps Script:
+    google.script.run
+      .withSuccessHandler(handleSuccess)
+      .withFailureHandler(handleError)
+      .writeToSheet({
+        tabName: "Pushpak Ads — Campaigns",
+        headers: [...],
+        rows: [...],
+        accountName: "Pushpak Ads",
+        dateRange: "Jun 1 – Jun 7, 2024"
+      });
+
+14. Apps Script checks if tab exists, creates it if not
+
+15. Apps Script clears existing content from row 1
+
+16. Apps Script writes metadata in row 1:
+    "Account: Pushpak Ads | Period: Jun 1–7 vs May 25–31 | Imported: Mon Jun 10, 10:42 AM"
+
+17. Apps Script writes header row in row 2
+
+18. Apps Script writes all data rows starting from row 3
+
+19. Apps Script applies bold formatting to header row (row 2)
+
+20. Apps Script auto-resizes all columns to fit content
+
+TAB NAMING CONVENTION:
+  Campaign level:   {Account Name} — Campaigns
+  Ad Set level:     {Account Name} — Ad Sets
+  Ad level:         {Account Name} — Ads
+  AI Insights:      {Account Name} — AI Insights
+
+
+================================================================================
+9. SCHEDULING ENGINE
+================================================================================
+
+9.1 Architecture Decision
+--------------------------
+Scheduling is server-side in NestJS. NOT in Apps Script.
+
+Apps Script time-based triggers are limited to 20 per user across all scripts.
+A user with 15 clients at daily schedule hits 15 triggers immediately.
+Server-side has no such constraint. This decision is final.
+
+
+9.2 Cron Job
+-------------
+Runs every minute. Checks which schedules are due. Executes them.
+
+@Cron('* * * * *')
+async runDueSchedules() {
+  const now = new Date();
+  const due = await this.prisma.schedule.findMany({
+    where: { status: 'active', nextRunAt: { lte: now } },
+    include: { template: true, account: true, user: true },
+  });
+  await Promise.allSettled(due.map(s => this.executeSchedule(s)));
+}
+
+
+9.3 Execute Schedule
+---------------------
+async executeSchedule(schedule) {
+  try {
+    const data = await this.metaService.fetchForSchedule(schedule);
+    await this.sheetsService.writeReport(schedule, data);
+    await this.sheetsService.writeTimestamp(schedule);
+    await this.prisma.schedule.update({
+      where: { id: schedule.id },
+      data: {
+        lastRunAt: new Date(),
+        lastRunStatus: 'success',
+        lastError: null,
+        retryCount: 0,
+        nextRunAt: this.calculateNextRun(schedule),
+      },
+    });
+  } catch (error) {
+    await this.handleFailure(schedule, error);
+  }
+}
+
+
+9.4 Failure and Retry
+----------------------
+Attempt 1 fails → set retryCount=1, nextRunAt = now + 15 minutes
+Attempt 2 fails → set retryCount=2, nextRunAt = now + 30 minutes
+Attempt 3 fails → set lastRunStatus='failed', lastError=message,
+                   retryCount=0, nextRunAt = next scheduled occurrence
+Sidebar shows:   "Auto-refresh failed on {date}. Click Retry Now."
+
+
+9.5 Next Run Calculation
+-------------------------
+Install: npm install date-fns date-fns-tz
+
+calculateNextRun(schedule: Schedule): Date {
+  const now = new Date();
+  const [hour, minute] = schedule.refreshTime.split(':').map(Number);
+  // Convert to user's timezone using date-fns-tz toZonedTime
+  // Set hour and minute
+  // If daily and time has passed today, move to tomorrow
+  // If weekly, add 7 days
+  // If monthly, add 1 month
+  // Convert back to UTC using fromZonedTime
+  // Return UTC date for DB storage
+}
+
+
+9.6 Google Sheets API Write (Backend)
+--------------------------------------
+async writeReport(schedule: Schedule, data: ReportData) {
+  const account = await this.prisma.connectedAccount.findFirst({
+    where: { userId: schedule.userId },
+  });
+
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+  );
+  oauth2Client.setCredentials({ refresh_token: decrypt(account.googleRefToken) });
+
+  const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+  // values.update only updates content — preserves cell formatting
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: schedule.sheetId,
+    range: `${schedule.sheetTabName}!A1`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [data.headers, ...data.rows] },
+  });
+}
+
+
+9.7 Schedule API Endpoints
+---------------------------
+GET    /schedules                  List all with status, lastRun, nextRun
+POST   /schedules                  Create new schedule
+PATCH  /schedules/:id              Update (time, frequency, sheetId, tabName)
+DELETE /schedules/:id              Delete permanently
+POST   /schedules/:id/run-now      Trigger immediately
+PATCH  /schedules/:id/pause        Set status = paused
+PATCH  /schedules/:id/resume       Set status = active, recalculate nextRunAt
+
+
+9.8 Sidebar Schedule Card Shows
+---------------------------------
+- Template name
+- Account name
+- Frequency and time (e.g. "Daily at 10:00 AM IST")
+- Status badge: Active | Paused | Failed
+- Last run: "Mon Jun 10, 10:02 AM — Success"
+         or "Mon Jun 10 — Failed (Meta API timeout)"
+- Next run: "Tue Jun 11, 10:00 AM"
+- Actions: Pause | Run Now | Edit | Delete
+
+
+================================================================================
+10. AI INSIGHTS ENGINE
+================================================================================
+
+10.1 Trigger and Flow
+----------------------
+The AI does NOT run automatically. Marketer clicks button when ready.
+
+1.  User clicks Generate AI Insights in sidebar
+2.  Sidebar calls google.script.run.getSheetData({ accountName })
+3.  Apps Script reads data from Campaigns, Ad Sets, Ads tabs
+4.  Apps Script returns all data to sidebar
+5.  Sidebar calls POST /ai/generate with data + accountId
+6.  NestJS builds the GPT-4 prompt
+7.  NestJS calls OpenAI API — model: gpt-4, max_tokens: 1000, temperature: 0.3
+8.  NestJS saves prompt + response to AiReport table
+9.  NestJS returns structured insight
+10. Sidebar calls google.script.run.writeAiInsights({ tabName, content })
+11. Apps Script writes to the AI Insights tab
+12. Sidebar shows insight with thumbs up/down and copy button
+
+
+10.2 The GPT-4 Prompt
+----------------------
+You are a Meta Ads performance analyst. Analyse the campaign data below and write
+a structured plain-English performance report for a marketing client.
+
+The client is NOT technical. Do not use jargon. Do not explain what metrics mean.
+Be direct, specific, and actionable. Use the actual numbers from the data.
+
+AD ACCOUNT: {accountName}
+CURRENCY: {currency}
+REPORT PERIOD: {dateRange}
+PREVIOUS PERIOD: {prevDateRange}
+
+CAMPAIGN DATA:
+{campaignRows formatted as readable text}
+
+AD SET DATA:
+{adsetRows formatted as readable text}
+
+AD LEVEL DATA (with creative details):
+{adRows with image names and ad copy}
+
+Produce exactly 4 sections using these exact headings.
+Do not add any other sections.
+
+PERFORMANCE SUMMARY
+2 to 3 sentences. State total spend, total leads or conversions, average CPL
+or CPA. State whether performance improved or declined vs the previous period
+with exact % change.
+
+CREATIVE FATIGUE ALERT
+Look for ads where frequency is above 3.5 AND CTR has declined vs previous period.
+If found: name the specific ad, the ad set it belongs to, state the current
+frequency, state the CTR change, and recommend pausing and replacing the creative.
+If none found: write exactly "No creative fatigue detected this period."
+
+BUDGET WASTE ALERT
+Look for any campaign or ad set that spent more than {currency} 1000 with zero
+leads or zero conversions in this period.
+If found: name it, state the exact amount wasted, recommend pausing it.
+If multiple found: list all of them.
+If none found: write exactly "No budget waste detected this period."
+
+SCALING OPPORTUNITY
+Find the campaign or ad set with the lowest CPL or CPA that is at least 20%
+below the account average CPL or CPA.
+If found: name it, state its CPL vs account average, recommend a specific %
+budget increase.
+If none found: write exactly "No clear scaling opportunity this period."
+
+Keep the total output under 350 words. No bullet points. No markdown.
+Plain text only. Each section heading on its own line.
+One blank line between sections.
+
+
+10.3 AI Insights Tab Structure in Sheet
+-----------------------------------------
+Row 1:    {Account Name} — AI Insights
+Row 2:    Period: {dateRange} | Generated: {timestamp}
+Row 3:    (empty)
+Row 4:    PERFORMANCE SUMMARY  (bold)
+Row 5+:   Summary text
+Row N:    (empty)
+Row N+1:  CREATIVE FATIGUE ALERT  (bold)
+Row N+2+: Creative fatigue text
+Row M:    (empty)
+Row M+1:  BUDGET WASTE ALERT  (bold)
+Row M+2+: Budget waste text
+Row P:    (empty)
+Row P+1:  SCALING OPPORTUNITY  (bold)
+Row P+2+: Scaling text
+Row Q:    (empty)
+Row Q+1:  -- Your notes (add before sending to client) --
+Row Q+2:  (blank — marketer types here)
+Row Q+3:  (blank)
+Row Q+4:  (blank)
+
+Section headings are bold. Rest is plain text. No coloring.
+Keeps it clean for copy-paste.
+
+
+10.4 AI API Endpoints
+----------------------
+POST /ai/generate          Generate insights from sheet data
+POST /ai/feedback          Save thumbs up or down on an AiReport
+GET  /ai/history           Last 10 AI reports for current user
+
+
+10.5 Context Window Management
+--------------------------------
+If user has more than 200 rows total across all tabs:
+1. Aggregate to campaign level only
+2. Keep top 20 campaigns by spend
+3. Add note to prompt: "Data has been summarised to top 20 campaigns by spend."
+This ensures prompt always fits within 8K tokens.
+
+
+================================================================================
+11. GOOGLE APPS SCRIPT ADD-ON
+================================================================================
+
+11.1 appsscript.json
+---------------------
+{
+  "timeZone": "Asia/Kolkata",
+  "dependencies": {},
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/script.container.ui"
+  ],
+  "addOns": {
+    "common": {
+      "name": "ReportPilot",
+      "logoUrl": "https://your-backend.render.com/logo.png",
+      "homepageTrigger": { "runFunction": "onOpen" }
+    },
+    "sheets": {
+      "homepageTrigger": { "runFunction": "onOpen" }
+    }
+  }
+}
+
+
+11.2 Code.gs — Full Function List
+-----------------------------------
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('ReportPilot')
+    .addItem('Open ReportPilot', 'openSidebar')
+    .addToUi();
+}
+
+function openSidebar() {
+  const html = HtmlService
+    .createHtmlOutputFromFile('sidebar')
+    .setTitle('ReportPilot')
+    .setWidth(320);
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+function writeToSheet(payload) {
+  // payload: { tabName, headers, rows, dateRange, accountName }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(payload.tabName);
+  if (!sheet) sheet = ss.insertSheet(payload.tabName);
+  sheet.clearContents();
+
+  // Row 1: metadata
+  sheet.getRange(1, 1).setValue(
+    payload.accountName + ' | ' + payload.dateRange +
+    ' | Imported: ' + new Date().toLocaleString('en-IN')
+  );
+
+  // Row 2: headers (bold)
+  sheet.getRange(2, 1, 1, payload.headers.length).setValues([payload.headers]);
+  sheet.getRange(2, 1, 1, payload.headers.length).setFontWeight('bold');
+
+  // Row 3+: data rows
+  if (payload.rows.length > 0) {
+    sheet.getRange(3, 1, payload.rows.length, payload.rows[0].length)
+      .setValues(payload.rows);
+  }
+
+  // Auto-resize columns
+  for (let i = 1; i <= payload.headers.length; i++) {
+    sheet.autoResizeColumn(i);
+  }
+
+  return { success: true, rowsWritten: payload.rows.length };
+}
+
+function writeAiInsights(payload) {
+  // payload: { tabName, accountName, dateRange, timestamp, content }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(payload.tabName);
+  if (!sheet) sheet = ss.insertSheet(payload.tabName);
+  sheet.clearContents();
+
+  const rows = [
+    [payload.accountName + ' — AI Insights'],
+    ['Period: ' + payload.dateRange + ' | Generated: ' + payload.timestamp],
+    [''],
+    ...payload.content.map(line => [line]),
+    [''],
+    ['-- Your notes (add below before sending to client) --'],
+    [''], [''], [''],
+  ];
+
+  sheet.getRange(1, 1, rows.length, 1).setValues(rows);
+  sheet.getRange(1, 1).setFontWeight('bold').setFontSize(12);
+
+  const headings = [
+    'PERFORMANCE SUMMARY',
+    'CREATIVE FATIGUE ALERT',
+    'BUDGET WASTE ALERT',
+    'SCALING OPPORTUNITY'
+  ];
+  for (let i = 1; i <= rows.length; i++) {
+    if (headings.includes(sheet.getRange(i, 1).getValue())) {
+      sheet.getRange(i, 1).setFontWeight('bold');
+    }
+  }
+
+  sheet.autoResizeColumn(1);
+  return { success: true };
+}
+
+function getSheetData(payload) {
+  // payload: { accountName }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const levels = ['Campaigns', 'Ad Sets', 'Ads'];
+  const result = {};
+  for (const level of levels) {
+    const tabName = payload.accountName + ' — ' + level;
+    const sheet = ss.getSheetByName(tabName);
+    if (sheet) {
+      const data = sheet.getDataRange().getValues();
+      result[level.toLowerCase().replace(' ', '_')] = {
+        headers: data[1] || [],   // row 2 is headers
+        rows: data.slice(2) || [] // data starts at row 3
+      };
+    }
+  }
+  return result;
+}
+
+function getSpreadsheetId() {
+  return SpreadsheetApp.getActiveSpreadsheet().getId();
+}
+
+function getSheetInfo() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  return {
+    id: ss.getId(),
+    name: ss.getName(),
+    url: ss.getUrl(),
+    sheets: ss.getSheets().map(s => s.getName()),
+  };
+}
+
+function storeToken(token) {
+  PropertiesService.getUserProperties().setProperty('rp_jwt', token);
+}
+
+function getToken() {
+  return PropertiesService.getUserProperties().getProperty('rp_jwt');
+}
+
+function clearToken() {
+  PropertiesService.getUserProperties().deleteProperty('rp_jwt');
+}
+
+
+11.3 sidebar.html
+------------------
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { margin: 0; padding: 0; overflow: hidden; }
+      iframe { width: 100%; height: 100vh; border: none; }
+    </style>
+  </head>
+  <body>
+    <iframe src="https://your-backend.render.com/sidebar/index.html"></iframe>
+  </body>
+</html>
+
+
+11.4 Key Apps Script Rules
+---------------------------
+- google.script.run is the bridge from iframe to .gs functions
+- It is asynchronous and callback-based — NOT Promise-based
+- Always attach .withSuccessHandler() and .withFailureHandler()
+- Only pass plain objects, arrays, strings, numbers — no class instances
+- Maximum execution time: 6 minutes per function call
+- No npm packages — pure JavaScript with V8 runtime
+- Deploy via: Extensions → Apps Script → Deploy → New Deployment → Add-on type
+
+
+================================================================================
+12. REACT SIDEBAR (VITE)
+================================================================================
+
+12.1 Vite Config
+-----------------
+// vite.config.ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  build: {
+    outDir: '../backend/public/sidebar',
+    emptyOutDir: true,
+  },
+  server: { port: 5173 },
+});
+
+NestJS serves /public as static files.
+Sidebar available at: https://your-backend.com/sidebar/index.html
+
+
+12.2 Dependencies
+------------------
+axios: ^1.x
+@tanstack/react-query: ^5.x
+No UI library. Keep minimal — sidebar is 320px wide.
+
+
+12.3 Screen List
+-----------------
+/login            Google Sign-In button
+/connect-meta     Connect Meta button
+/home             Import, template picker, AI insights, schedule status
+/templates        List of all templates
+/templates/new    Create new template
+/templates/:id    Edit existing template
+/schedules        List all schedules with status cards
+/schedules/new    Create new schedule
+/schedules/:id    Edit schedule
+/ai               AI Insights (loading → result → feedback)
+/settings         Connected accounts, disconnect, sheet info
+
+
+12.4 google.script.run Promisified
+------------------------------------
+// src/utils/appscript.ts
+export const runScript = <T>(fnName: string, payload?: any): Promise<T> => {
+  return new Promise((resolve, reject) => {
+    (window as any).google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(reject)
+      [fnName](payload);
+  });
+};
+
+// Usage:
+const data = await runScript<SheetData>('getSheetData', { accountName: 'Pushpak Ads' });
+await runScript('writeToSheet', { tabName: '...', headers: [...], rows: [...] });
+
+
+12.5 API Call Pattern
+----------------------
+// src/services/api.service.ts
+import axios from 'axios';
+
+const BASE_URL = 'https://your-backend.render.com';
+
+export const apiClient = (token: string) => axios.create({
+  baseURL: BASE_URL,
+  headers: { Authorization: `Bearer ${token}` },
+});
+
+
+================================================================================
+13. API CONTRACT — ALL ENDPOINTS
+================================================================================
+
+AUTH
+----
+GET  /auth/google                      None    Redirect to Google OAuth
+GET  /auth/google/callback             None    { token: string, user: User }
+GET  /auth/me                          JWT     { id, email, name, plan, avatarUrl }
+POST /auth/logout                      JWT     { success: true }
+
+META
+----
+GET  /meta/auth-url                    JWT     { url: string }
+GET  /meta/callback?code=&state=       JWT     { success: true, accounts: [...] }
+GET  /meta/accounts                    JWT     [{ bmId, bmName, adAccounts: [{id, name, currency}] }]
+GET  /meta/ad-accounts?bmId=           JWT     [{ id, name, currency }]
+POST /meta/import                      JWT     Body: { templateId, accountId, dateRange, prevDateRange }
+                                               Returns: { accountName, reportLevel, headers[], rows[][], currency, dateRange, prevDateRange }
+POST /meta/disconnect                  JWT     Body: { accountId }
+                                               Returns: { success: true }
+
+TEMPLATES
+---------
+GET    /templates                      JWT     [Template]
+POST   /templates                      JWT     Body: { name, reportLevel, dateGranularity, dateRange, metrics[], dimensions[], columnOrder[], sortBy?, sortDirection?, filters? }
+                                               Returns: Template
+GET    /templates/:id                  JWT     Template
+PATCH  /templates/:id                  JWT     Partial<Template> → Template
+DELETE /templates/:id                  JWT     { success: true }  403 if isPrebuilt=true
+
+SCHEDULES
+---------
+GET    /schedules                      JWT     [Schedule + { lastRunDisplay, nextRunDisplay }]
+POST   /schedules                      JWT     Body: { templateId, accountId, frequency, refreshTime, timezone, sheetId, sheetTabName }
+                                               Returns: Schedule
+PATCH  /schedules/:id                  JWT     Partial<Schedule> → Schedule
+DELETE /schedules/:id                  JWT     { success: true }
+POST   /schedules/:id/run-now          JWT     { success: true, ranAt: string }
+PATCH  /schedules/:id/pause            JWT     Schedule
+PATCH  /schedules/:id/resume           JWT     Schedule
+
+SHEETS
+------
+POST   /sheets/test                    JWT     Body: { sheetId, value }
+                                               Returns: { success: true }
+
+AI
+--
+POST   /ai/generate                    JWT     Body: { accountId, reportData: { campaigns, adsets, ads } }
+                                               Returns: { id, performanceSummary, creativeFatigue, budgetWaste, scalingOpp }
+POST   /ai/feedback                    JWT     Body: { aiReportId, feedback: 'thumbs_up'|'thumbs_down' }
+                                               Returns: { success: true }
+GET    /ai/history                     JWT     [AiReport]
+
+USERS
+-----
+GET    /users/me                       JWT     Full User object with connected accounts
+DELETE /users/me                       JWT     Deletes user + all data → { success: true }
+
+ALL ERROR RESPONSES:
+{
+  "statusCode": 400,
+  "message": "Human-readable error message",
+  "error": "BAD_REQUEST"
+}
+
+COMMON STATUS CODES:
+200 — OK
+201 — Created
+400 — Bad Request (validation failed)
+401 — Unauthorized (no JWT or invalid JWT)
+403 — Forbidden (insufficient permissions)
+404 — Not Found
+429 — Rate Limited (Meta API limit hit)
+500 — Internal Server Error
+
+
+================================================================================
+14. ERROR HANDLING STANDARDS
+================================================================================
+
+Every error has a defined message. No raw error codes or blank screens.
+
+Meta token expired
+  → "Your Meta connection expired. Click Reconnect."
+
+Meta API rate limit (code 17 or 613)
+  → "Meta is temporarily limiting requests. Retrying in 60 seconds."
+
+Meta API down
+  → "Could not reach Meta. Try again in a few minutes."
+
+No data for date range
+  → "No campaign activity found for this date range."
+
+Sheet tab not found
+  → "The tab '{tabName}' could not be found in this sheet."
+
+Sheet not accessible
+  → "Could not write to your sheet. Check that ReportPilot still has access."
+
+Schedule failed after 3 attempts
+  → "Auto-refresh failed on {date}. Reason: {error}. Click to retry."
+
+OpenAI unavailable
+  → "AI insights are unavailable right now. Try again in a few minutes."
+
+OpenAI timeout
+  → "Analysis is taking longer than expected. Please try again."
+
+No sheet data for AI
+  → "Import your campaign data first, then generate insights."
+
+Template delete prebuilt
+  → "Default templates cannot be deleted."
+
+Disconnect Meta
+  → Show confirmation: "This will remove {account name} from ReportPilot.
+    Your sheet data will not be deleted."
+
+Delete account
+  → Show confirmation: "This will permanently delete your account and all data.
+    This cannot be undone."
+
+Global exception filter in NestJS:
+  Catches all unhandled errors, returns standard error shape.
+  Never let raw Prisma errors or Node errors reach the client.
+
+
+================================================================================
+15. EDGE CASES — FULL LIST
+================================================================================
+
+META API
+--------
+Rate limit (code 17 or 613)
+  Catch, wait 60 seconds, retry once, return 429 to sidebar if still failing.
+
+Pagination
+  Always loop through all pages using cursor. Never return partial data.
+
+Empty date range
+  Campaign exists but no spend. Return empty rows array, not an error.
+
+Different currency per account
+  Always include account currency field in every row.
+
+Account deactivated (code 100)
+  Show: "This ad account is inactive or has been deactivated."
+
+Token revoked by user from Meta (code 190)
+  Prompt reconnect immediately.
+
+Business Manager access removed (code 200)
+  Show which BM lost access.
+
+IMPORT
+------
+Tab already exists
+  Overwrite from row 1. Do not append.
+
+Sheet deleted by user
+  Catch 404 from Sheets API. Show error in sidebar.
+
+Over 1000 rows
+  Warn: "This report has {n} rows and may take a moment."
+
+Column order has unknown field
+  Skip that field silently. Do not error.
+
+Scheduled refresh while user is editing
+  values.update only touches the data range. User's edits outside are preserved.
+
+TEMPLATES
+---------
+Delete template with active schedules
+  Block delete. Show: "This template is used by {n} active schedules.
+  Delete the schedules first."
+
+Edit template with active schedules
+  Allow edit. Note: "Changes apply to all schedules using this template
+  from the next run."
+
+SCHEDULES
+---------
+Schedule fires while Meta API is down
+  Retry mechanism handles it. Mark failed after 3 attempts.
+
+Google Sheet deleted
+  Sheets API returns 404. Mark schedule as failed with clear error.
+
+Google refresh token expired
+  Re-authentication prompt.
+
+Two schedules for same account at same time
+  Both run. Both write to different tabs. No conflict.
+
+Timezone DST changes
+  date-fns-tz handles this automatically.
+
+AI INSIGHTS
+-----------
+Empty sheet
+  Show: "Import your campaign data first."
+
+Low spend (under Rs. 500 total)
+  Add caveat to prompt: "Note: spend is very low. Insights may be limited."
+
+OpenAI timeout
+  30-second timeout on axios call. Catch and return 500 with user message.
+
+GPT-4 output does not follow 4-section format
+  Parse defensively. Fall back to showing raw output if parsing fails.
+
+Stale data warning
+  If last import was more than 24 hours ago: "Your data was last imported
+  {time ago}. Import fresh data for accurate insights."
+
+AUTH
+----
+JWT expired
+  401 response. Sidebar catches globally, clears token, redirects to login.
+
+Two browsers simultaneously
+  Both JWTs valid. Both work independently.
+
+Google access revoked by user
+  Detect on next Sheets write. Prompt user to log in again.
+
+
+================================================================================
+16. WEEK-BY-WEEK SPRINT PLAN
+================================================================================
+
+WEEK 1 — FOUNDATION
+--------------------
+Goal: Monorepo live, DB schema created, Google OAuth working, NestJS on Render,
+Apps Script hello world deployed, Sheets API write verified.
+
+Tasks:
+- Create GitHub monorepo with /backend /sidebar /addon /docs
+- Scaffold NestJS with all 8 modules (auth, users, meta, templates, schedules,
+  sheets, ai, prisma)
+- Install all backend dependencies
+- Create Supabase project, save URL and keys
+- Write full Prisma schema with all 5 tables, run migration
+- Set up Google Cloud project, enable Sheets API and Google OAuth2 API
+- Create OAuth 2.0 Web credentials in Google Cloud
+- Implement Google OAuth in NestJS — all 4 scopes including Sheets
+  Add prompt=consent&access_type=offline
+- JWT signing and verification working
+- User row created in DB on first login
+- Google refresh token encrypted and stored
+- Write and test POST /sheets/test — must write to a real sheet
+- Deploy NestJS to Render free tier
+- Set up UptimeRobot to ping /ping every 5 minutes
+- Deploy Apps Script hello world — sidebar loads in Sheets, calls /ping
+- Meta App ID and Secret from Pushpak added to .env
+
+Done when: Google login works, user row appears in Supabase, /sheets/test writes
+to a real sheet, sidebar opens inside Google Sheets.
+
+---
+
+WEEK 2 — META API INTEGRATION
+-------------------------------
+Goal: Full Meta OAuth flow, campaign data fetching, token encrypted and stored,
+token refresh cron implemented, creative data included.
+
+Tasks:
+- Implement GET /meta/auth-url
+- Implement GET /meta/callback — full token exchange + long-lived upgrade
+- AES-256 token encryption with crypto-js
+- ConnectedAccount row created after Meta connect
+- Implement GET /meta/accounts — calls Meta Graph API for BM list
+- Implement GET /meta/ad-accounts
+- Implement POST /meta/import — full dynamic query builder from template config
+- Pagination loop for all Meta API responses
+- Creative data fetch from /ads endpoint and merge by ad ID
+- Period comparison data fetch and % change calculation
+- Token refresh cron job (daily at 2 AM)
+- Submit Meta App Review NOW — do not wait until later
+- Test with Pushpak's actual Meta account
+
+Done when: Real campaign data from a real Meta account returns from
+POST /meta/import including creative fields and period comparison.
+
+---
+
+WEEK 3 — SHEETS ADD-ON + TEMPLATES
+-------------------------------------
+Goal: Sidebar UI working inside Sheets, import writes to correct tabs,
+templates working, 5 prebuilt templates seeded.
+
+Tasks:
+- Scaffold React + Vite sidebar project
+- Configure Vite to output to /backend/public/sidebar
+- NestJS serves /public as static files
+- Apps Script sidebar.html loads React app from backend URL
+- JWT storage and retrieval via PropertiesService
+- Login screen with Google Sign-In
+- Connect Meta screen
+- Account selector screen
+- Implement all template API endpoints in NestJS
+- Template seeding in prisma/seed.ts — runs on first user login
+- Template list screen in sidebar
+- Template creation screen — metric checkboxes, column order, sort, filters,
+  name, save
+- Template edit screen
+- Home screen — template picker, import button, quick status
+- Import flow end to end — POST /meta/import → sidebar → google.script.run
+  .writeToSheet → tab created → data written
+- Tab naming convention implemented
+- Header bold, column auto-resize, metadata row written
+
+Done when: A real campaign report lands in a correctly named, formatted
+Google Sheet tab after clicking Import.
+
+---
+
+WEEK 4 — SCHEDULING ENGINE
+----------------------------
+Goal: Server-side cron running, schedules executing, retry working,
+Sheets API write from backend working.
+
+Tasks:
+- Install date-fns and date-fns-tz
+- Implement schedule CRUD endpoints
+- NestJS cron job runs every minute
+- executeSchedule function — Meta fetch + Sheets write + timestamp + DB update
+- handleFailure function — retry at +15min, +30min, then fail
+- calculateNextRun function — timezone-aware
+- Google Sheets API write from NestJS using Google refresh token
+- Last Updated timestamp write after successful refresh
+- Schedule management screen in sidebar
+- Schedule creation screen — template, account, frequency, time, timezone,
+  sheet ID, tab name
+- Pause, resume, delete actions
+- Run Now button
+- Last run and next run display
+- Failed schedule alert in sidebar
+- Test: set schedule 2 minutes in future, confirm it fires, data appears in sheet
+
+Done when: A schedule fires automatically at set time and correct data appears
+in the specified sheet tab without any user action.
+
+---
+
+WEEK 5 — AI INSIGHTS ENGINE
+------------------------------
+Goal: GPT-4 integration working, all 4 insight types correct, AI Insights tab
+written, feedback saved, tested with real data from Pushpak.
+
+Tasks:
+- Install openai npm package in NestJS
+- Implement POST /ai/generate
+- Get real campaign data from Pushpak for 2-3 client accounts
+- Write and iterate on GPT-4 prompt until all 4 insight types are accurate
+- Context window management — aggregate if over 200 rows
+- getSheetData function in Code.gs — reads from all 3 tabs
+- Sidebar AI Insights screen — trigger, loading state, output, thumbs, copy
+- writeAiInsights function in Code.gs — writes to AI Insights tab
+- POST /ai/feedback implemented and saving
+- Error handling — timeout, OpenAI down, empty sheet, low spend
+- Test with 3 different account types (lead gen, video, awareness)
+
+Done when: Clicking Generate AI Insights on a real account produces a 4-section
+plain-English summary that accurately reflects performance and writes to the
+AI Insights tab correctly.
+
+---
+
+WEEK 6 — BETA LAUNCH
+----------------------
+Goal: Product stable, 5–10 users onboarded, critical issues fixed within 48h.
+
+Tasks:
+- Full manual test of every critical flow
+- All error messages present — test intentional failures
+- UptimeRobot confirmed keeping server warm
+- Meta App Review status checked
+- Private install link generated for the add-on
+- Pushpak shares link with 5-10 beta users in WhatsApp community
+- First import done with each beta user on a call or screenshare
+- Collect feedback after one week of use
+- Fix top 3 issues within 48 hours
+- Document all known bugs for next sprint
+
+Done when: At least 3 beta users have imported real data, generated AI insights,
+and provided feedback.
+
+
+================================================================================
+17. PRE-BUILT TEMPLATES (SEED DATA)
+================================================================================
+
+Seeded on first user login. Check for existing templates before inserting.
+
+const prebuiltTemplates = [
+  {
+    name: 'Daily Performance Report',
+    reportLevel: 'campaign',
+    dateGranularity: 'day',
+    dateRange: 'last_7',
+    metrics: ['spend','impressions','cpm','clicks','ctr','cpc','thruplay','vtr','cpv'],
+    dimensions: ['campaign_name'],
+    columnOrder: ['date','campaign_name','spend','impressions','cpm','clicks',
+                  'ctr','cpc','thruplay','vtr','cpv'],
+    sortBy: 'date',
+    sortDirection: 'asc',
+    isPrebuilt: true,
+  },
+  {
+    name: 'Weekly Client Report',
+    reportLevel: 'campaign',
+    dateGranularity: 'week',
+    dateRange: 'last_30',
+    metrics: ['spend','leads','cpl','ctr','cpc','roas','impressions','reach'],
+    dimensions: ['campaign_name'],
+    columnOrder: ['campaign_name','spend','leads','cpl','ctr','cpc','roas',
+                  'impressions','reach','period_change'],
+    sortBy: 'spend',
+    sortDirection: 'desc',
+    isPrebuilt: true,
+  },
+  {
+    name: 'Lead Generation Report',
+    reportLevel: 'adset',
+    dateGranularity: 'week',
+    dateRange: 'last_30',
+    metrics: ['spend','leads','cpl','cpc','ctr','frequency'],
+    dimensions: ['campaign_name','adset_name'],
+    columnOrder: ['campaign_name','adset_name','spend','leads','cpl','cpc',
+                  'ctr','frequency'],
+    sortBy: 'cpl',
+    sortDirection: 'asc',
+    isPrebuilt: true,
+  },
+  {
+    name: 'Video Performance Report',
+    reportLevel: 'ad',
+    dateGranularity: 'day',
+    dateRange: 'last_7',
+    metrics: ['spend','impressions','reach','thruplay','vtr','cpv','frequency'],
+    dimensions: ['ad_name','ad_creative_image','ad_copy'],
+    columnOrder: ['date','ad_name','ad_creative_image','ad_copy','spend',
+                  'impressions','reach','thruplay','vtr','cpv','frequency'],
+    sortBy: 'spend',
+    sortDirection: 'desc',
+    isPrebuilt: true,
+  },
+  {
+    name: 'Awareness Campaign Report',
+    reportLevel: 'campaign',
+    dateGranularity: 'week',
+    dateRange: 'last_30',
+    metrics: ['spend','impressions','reach','cpm','frequency','ctr'],
+    dimensions: ['campaign_name'],
+    columnOrder: ['campaign_name','spend','impressions','reach','cpm',
+                  'frequency','ctr'],
+    sortBy: 'spend',
+    sortDirection: 'desc',
+    isPrebuilt: true,
+  },
+];
+
+
+================================================================================
+18. TODO — PARKED FOR LATER
+================================================================================
+
+These are confirmed future features. Nothing below gets built in the 6-week sprint.
+
+POST-BETA (first update after beta is stable)
+---------------------------------------------
+Razorpay billing
+  Free, Pro (Rs. 499/month), Agency (Rs. 1,499/month) plans. LTD at Rs. 2,999.
+  Add plan gating to all Pro endpoints.
+
+Welcome email via Resend
+  Triggered on first successful Meta connect. Simple onboarding email.
+  Use Resend.com.
+
+Plan-based rate limiting
+  Free: 5 AI insights per week. Pro: unlimited.
+
+VERSION 2
+---------
+Google Ads connector
+  Same template system, new /google-ads module.
+
+Google Analytics 4 connector
+  Google Analytics Data API v1.
+
+Auto email send to client
+  Resend integration. Schedule sends AI summary to client email automatically.
+
+Drag-and-drop column reordering
+  In the template creator sidebar screen.
+
+VERSION 3
+---------
+Looker Studio connector
+
+Branded PDF exports
+  Puppeteer renders sheet data as styled PDF with agency logo.
+
+Team seats
+  Multi-user under one agency account. Role-based access.
+
+VERSION 4
+---------
+WhatsApp alert bot
+  Proactive notifications when CPL spikes or budget is about to run out.
+
+VERSION 5
+---------
+LinkedIn Ads
+TikTok Ads
+
+FUTURE
+------
+Developer API
+  Public REST API for agencies to build on top of ReportPilot.
+
+Google Workspace Marketplace listing
+  Requires: working product, privacy policy page, support email,
+  Meta App Review approved.
+
+
+================================================================================
+19. BEFORE YOU WRITE THE FIRST LINE OF CODE
+================================================================================
+
+Confirm all of these are done before starting Week 1.
+Missing any of these will cause a stop mid-sprint.
+
+1. SUPABASE PROJECT CREATED
+   Go to supabase.com → New Project
+   Save: Project URL, anon key, service role key
+   Status: PENDING
+
+2. META APP CREDENTIALS FROM PUSHPAK
+   Need: App ID, App Secret
+   Confirm these scopes are added: ads_read, ads_management,
+   business_management, read_insights
+   Status: PENDING — get from Pushpak
+
+3. GOOGLE CLOUD PROJECT CREATED
+   Go to console.cloud.google.com → New Project → ReportPilot
+   Enable: Google Sheets API, Google OAuth2 API
+   Create OAuth 2.0 credentials (Web application type)
+   Add redirect URI: https://your-render-url.render.com/auth/google/callback
+   Save: Client ID and Client Secret
+   Status: PENDING
+
+4. GITHUB REPO CREATED
+   New repo → reportpilot → initialize with README
+   Create folders: /backend /sidebar /addon /docs
+   Status: PENDING
+
+5. RENDER ACCOUNT CREATED
+   Go to render.com → free account
+   Will deploy backend in Week 1, Day 3
+   Status: PENDING
+
+6. UPTIMEROBOT ACCOUNT CREATED
+   Go to uptimerobot.com → free account
+   Configure after Render deployment
+   Status: PENDING
+
+7. OPENAI API KEY
+   Go to platform.openai.com → API keys → Create new key
+   Save to .env as OPENAI_API_KEY
+   Status: PENDING
+
+8. CONFIRM FRIEND IS AVAILABLE FROM WEEK 1
+   Align on who builds what.
+   Suggested split:
+     Dev: NestJS backend, Meta API, AI module, Scheduling engine
+     Friend: React sidebar, Apps Script, UI screens
+   Both review each other's API contracts before building.
+   Status: PENDING
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
+This is the single source of truth for the ReportPilot project.
+Any feature, endpoint, schema change, or architectural decision should be
+reflected here before implementation begins.
+
+Last updated: June 2024
