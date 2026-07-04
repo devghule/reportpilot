@@ -1,13 +1,97 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+model User {
+  id        String             @id @default(uuid())
+  email     String             @unique
+  name      String?
+  googleId  String?            @unique
+  avatarUrl String?
+  plan      String             @default("free") // free | pro | agency
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  accounts  ConnectedAccount[]
+  templates Template[]
+  schedules Schedule[]
+  aiReports AiReport[]
+}
+
+model ConnectedAccount {
+  id              String     @id @default(uuid())
+  userId          String
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  metaBmId        String
+  metaBmName      String
+  metaAccountId   String     // e.g. act_123456789
+  metaAccountName String
+  currency        String     // INR | USD | AED etc.
+  accessToken     String     // AES-256 encrypted Meta long-lived token
+  tokenExpiresAt  DateTime
+  googleRefToken  String?    // AES-256 encrypted Google refresh token
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  schedules       Schedule[]
+
+  @@unique([userId, metaAccountId])
+}
+
+model Template {
+  id              String     @id @default(uuid())
+  userId          String
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  reportLevel     String     // campaign | adset | ad
+  dateGranularity String     // day | week | month
+  dateRange       String     // last_7 | last_30 | this_month | custom
+  metrics         String[]
+  dimensions      String[]
+  columnOrder     String[]
+  sortBy          String?
+  sortDirection   String?    // asc | desc
+  filters         Json?      // [{field, operator, value}]
+  isPrebuilt      Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  schedules       Schedule[]
+}
+
+model Schedule {
+  id            String           @id @default(uuid())
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  templateId    String
+  template      Template         @relation(fields: [templateId], references: [id])
+  accountId     String
+  account       ConnectedAccount @relation(fields: [accountId], references: [id])
+  frequency     String           // daily | weekly | monthly
+  refreshTime   String           // "HH:MM" in user's local timezone
+  timezone      String           // IANA timezone — e.g. "Asia/Kolkata"
+  status        String           @default("active") // active | paused | disabled
+  sheetId       String
+  sheetTabName  String
+  lastRunAt     DateTime?
+  lastRunStatus String?          // success | failed
+  lastError     String?
+  nextRunAt     DateTime?
+  retryCount    Int              @default(0)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+}
+
+model AiReport {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId     String
+  accountName   String
+  reportData    Json
+  promptUsed    String
+  insightOutput String
+  feedback      String?  // thumbs_up | thumbs_down
+  createdAt     DateTime @default(now())
 }

@@ -1,0 +1,20 @@
+{
+  "timeZone": "Asia/Kolkata",
+  "dependencies": {},
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/script.container.ui"
+  ],
+  "addOns": {
+    "common": {
+      "name": "ReportPilot",
+      "logoUrl": "https://your-backend.render.com/logo.png",
+      "homepageTrigger": { "runFunction": "onOpen" }
+    },
+    "sheets": {
+      "homepageTrigger": { "runFunction": "onOpen" }
+    }
+  }
+}

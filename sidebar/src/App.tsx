@@ -1,122 +1,50 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import './App.css';
+import { useAuth } from './hooks/useAuth';
+import { useRouter } from './hooks/useRouter';
+import { LoginScreen } from './screens/LoginScreen';
+import { ConnectMetaScreen } from './screens/ConnectMetaScreen';
+import { HomeScreen } from './screens/HomeScreen';
+import { TemplatesScreen } from './screens/TemplatesScreen';
+import { TemplateFormScreen } from './screens/TemplateFormScreen';
+import { SchedulesScreen } from './screens/SchedulesScreen';
+import { ScheduleFormScreen } from './screens/ScheduleFormScreen';
+import { AiScreen } from './screens/AiScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
 
 function App() {
-  const [count, setCount] = useState(0)
+  const { token, loading } = useAuth();
+  const { screen } = useRouter();
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+  if (loading) {
+    return (
+      <div className="screen screen-center">
+        <p className="muted">Loading…</p>
+      </div>
+    );
+  }
 
-      <div className="ticks"></div>
+  if (!token) {
+    return <LoginScreen />;
+  }
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+  switch (screen) {
+    case 'connect-meta':
+      return <ConnectMetaScreen />;
+    case 'templates':
+      return <TemplatesScreen />;
+    case 'template-form':
+      return <TemplateFormScreen />;
+    case 'schedules':
+      return <SchedulesScreen />;
+    case 'schedule-form':
+      return <ScheduleFormScreen />;
+    case 'ai':
+      return <AiScreen />;
+    case 'settings':
+      return <SettingsScreen />;
+    default:
+      return <HomeScreen />;
+  }
 }
 
-export default App
+export default App;
