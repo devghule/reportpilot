@@ -19,13 +19,24 @@ interface TabData {
 
 @Injectable()
 export class AiService {
-  private readonly openai: OpenAI;
+  private openai?: OpenAI;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
-  ) {
-    this.openai = new OpenAI({ apiKey: this.config.get<string>('OPENAI_API_KEY') });
+  ) {}
+
+  // Built lazily so a missing OPENAI_API_KEY only breaks AI endpoints,
+  // not the entire app's startup.
+  private getClient(): OpenAI {
+    if (!this.openai) {
+      const apiKey = this.config.get<string>('OPENAI_API_KEY');
+      if (!apiKey) {
+        throw new BadRequestException('AI insights are unavailable right now. Try again in a few minutes.');
+      }
+      this.openai = new OpenAI({ apiKey });
+    }
+    return this.openai;
   }
 
   async generate(userId: string, dto: AiGenerateDto) {
@@ -67,7 +78,7 @@ export class AiService {
 
     let rawOutput: string;
     try {
-      const completion = await this.openai.chat.completions.create(
+      const completion = await this.getClient().chat.completions.create(
         {
           model: 'gpt-4',
           max_tokens: 1000,

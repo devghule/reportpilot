@@ -24,7 +24,11 @@ import { CommonModule } from './common/common.module';
     }),
     ScheduleModule.forRoot(),
     ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', 'public'),
+      // process.cwd()-relative, not __dirname-relative: __dirname points at
+      // dist/src at runtime (even under `nest start`), but Nest is always
+      // launched from the backend/ directory, and the sidebar's Vite build
+      // outputs to backend/public regardless of dev vs prod.
+      rootPath: join(process.cwd(), 'public'),
     }),
 
     CommonModule,
