@@ -46,6 +46,36 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         'https://www.googleapis.com/auth/spreadsheets',
       ],
     });
+
+    // [TRACE] Belt-and-suspenders interception: wrap the underlying OAuth2
+    // HTTP client's getOAuthAccessToken directly, at the exact call site
+    // (node_modules/oauth/lib/oauth2.js) that produces the raw
+    // { statusCode, data } error from Google's token endpoint. This fires
+    // unconditionally on every non-2xx response, independent of whether
+    // passport-oauth2's own _createOAuthError/parseErrorResponse dispatch
+    // ever runs — so if parseErrorResponse's logging isn't showing up, this
+    // still will.
+    const originalGetOAuthAccessToken =
+      this._oauth2.getOAuthAccessToken.bind(this._oauth2);
+    (this._oauth2.getOAuthAccessToken as any) = (
+      code: string,
+      params: Record<string, unknown>,
+      callback: (...args: unknown[]) => void,
+    ) => {
+      (originalGetOAuthAccessToken as any)(
+        code,
+        params,
+        (err: unknown, accessToken: string, refreshToken: string, results: unknown) => {
+          if (err) {
+            // eslint-disable-next-line no-console
+            console.error(
+              `[TRACE] RAW getOAuthAccessToken error (bypassing passport-oauth2 entirely): ${JSON.stringify(err)}`,
+            );
+          }
+          callback(err, accessToken, refreshToken, results);
+        },
+      );
+    };
   }
 
   // Forces Google to always return a refresh token, and allows offline access.
