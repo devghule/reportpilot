@@ -22,3 +22,5 @@ Thumbs.db
 
 # Google OAuth credentials
 google-oauth-credentials.json
+
+.clasp.json

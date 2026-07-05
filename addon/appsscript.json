@@ -8,13 +8,17 @@
     "https://www.googleapis.com/auth/script.container.ui"
   ],
   "addOns": {
-    "common": {
-      "name": "ReportPilot",
-      "logoUrl": "https://your-backend.render.com/logo.png",
-      "homepageTrigger": { "runFunction": "onOpen" }
-    },
-    "sheets": {
-      "homepageTrigger": { "runFunction": "onOpen" }
+  "common": {
+  "name": "ReportPilot",
+  "logoUrl": "https://www.gstatic.com/images/branding/product/2x/drive_2020q4_48dp.png",
+  "homepageTrigger": {
+    "runFunction": "onOpen"
+  }
+},
+  "sheets": {
+    "homepageTrigger": {
+      "runFunction": "onOpen"
     }
   }
+}
 }
