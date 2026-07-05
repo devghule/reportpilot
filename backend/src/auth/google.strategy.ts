@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { Profile, Strategy, VerifyCallback } from 'passport-google-oauth20';
+import OAuth2Strategy = require('passport-oauth2');
 
 export interface GoogleAuthResult {
   googleId: string;
@@ -53,6 +54,30 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       access_type: 'offline',
       prompt: 'consent',
     };
+  }
+
+  // [TRACE] passport-oauth2 calls this with the RAW response body from
+  // Google's token endpoint whenever the exchange fails (non-2xx), before
+  // wrapping it into the generic `TokenError: Bad Request`. This is the only
+  // place the actual Google error (redirect_uri_mismatch, invalid_client,
+  // invalid_grant, etc.) is available — logging it here, then delegating to
+  // the default RFC 6749 parser so behavior is otherwise unchanged.
+  parseErrorResponse(body: string, status: number): Error | null {
+    this.logger.error(
+      `[TRACE] Google token endpoint error — HTTP ${status}, raw body: ${body}`,
+    );
+    try {
+      const json = JSON.parse(body);
+      this.logger.error(
+        `[TRACE] Google token error parsed — error="${json.error}" error_description="${json.error_description}" error_uri="${json.error_uri ?? ''}"`,
+      );
+    } catch (parseErr) {
+      this.logger.error(
+        '[TRACE] Google token error body was not valid JSON',
+        parseErr instanceof Error ? parseErr.stack : String(parseErr),
+      );
+    }
+    return OAuth2Strategy.prototype.parseErrorResponse.call(this, body, status);
   }
 
   validate(
