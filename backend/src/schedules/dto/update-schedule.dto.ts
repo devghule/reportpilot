@@ -1,12 +1,12 @@
-import { IsIn, IsOptional, IsString, Matches } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
 
 export class UpdateScheduleDto {
   @IsOptional()
-  @IsString()
+  @IsUUID()
   templateId?: string;
 
   @IsOptional()
-  @IsString()
+  @IsUUID()
   accountId?: string;
 
   @IsOptional()
@@ -21,13 +21,16 @@ export class UpdateScheduleDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   timezone?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   sheetId?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   sheetTabName?: string;
 }

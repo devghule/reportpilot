@@ -1,12 +1,10 @@
-import { IsIn, IsNotEmpty, IsString, Matches } from 'class-validator';
+import { IsIn, IsNotEmpty, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
 
 export class CreateScheduleDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsUUID()
   templateId!: string;
 
-  @IsString()
-  @IsNotEmpty()
+  @IsUUID()
   accountId!: string;
 
   @IsIn(['daily', 'weekly', 'monthly'])
@@ -19,13 +17,17 @@ export class CreateScheduleDto {
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   timezone!: string;
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   sheetId!: string;
 
+  // Google Sheets' own tab name limit is 100 characters.
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   sheetTabName!: string;
 }

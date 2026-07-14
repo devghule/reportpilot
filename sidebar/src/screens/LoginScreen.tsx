@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { useRouter } from '../hooks/useRouter';
 import { openOAuthPopup } from '../utils/popup';
+import { apiClient } from '../services/api.service';
+import { getErrorMessage } from '../utils/errorMessage';
+import type { BusinessManagerGroup } from '../types';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? '';
 
@@ -20,9 +23,19 @@ export function LoginScreen() {
         'google-auth-success',
       );
       await setToken(result.token);
-      navigate('connect-meta');
+
+      // Meta connections persist independently in the database — a returning
+      // user who already connected Meta shouldn't be sent through "Connect
+      // Meta" again just because their Google session expired and they had
+      // to log in again. Only show it when there's genuinely nothing connected.
+      const accounts = await apiClient(result.token)
+        .get<BusinessManagerGroup[]>('/meta/accounts')
+        .then((res) => res.data)
+        .catch(() => []);
+      const alreadyConnected = accounts.some((bm) => bm.adAccounts.length > 0);
+      navigate(alreadyConnected ? 'home' : 'connect-meta');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed.');
+      setError(getErrorMessage(err, 'Login failed.'));
     } finally {
       setLoading(false);
     }

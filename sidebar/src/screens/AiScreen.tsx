@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useRouter } from '../hooks/useRouter';
 import { apiClient } from '../services/api.service';
 import { runScript } from '../utils/appscript';
+import { getErrorMessage } from '../utils/errorMessage';
 import type { AiInsightResult, BusinessManagerGroup, SheetData } from '../types';
 
 function tabNameForAiInsights(accountName: string) {
@@ -44,7 +45,7 @@ export function AiScreen() {
       return data;
     },
     onSuccess: () => setFeedbackGiven(false),
-    onError: (err) => setError(err instanceof Error ? err.message : 'Could not generate insights.'),
+    onError: (err) => setError(getErrorMessage(err, 'Could not generate insights.')),
   });
 
   const feedbackMutation = useMutation({

@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
@@ -85,20 +86,35 @@ export class MetaService {
     }[] = [];
 
     for (const business of businesses.data ?? []) {
-      const adAccounts = await this.graphGet<{
-        data: { id: string; name: string; currency: string }[];
-      }>(`${META_GRAPH_URL}/${business.id}/owned_ad_accounts`, {
-        fields: 'id,name,currency',
-        access_token: accessToken,
-      });
+      // Ad accounts an agency/marketer manages are usually shared as a
+      // "client" account, not "owned" — owned_ad_accounts alone misses these
+      // entirely (a very common setup), so the account picker would show
+      // nothing after an apparently successful Meta connect. Fetch both
+      // edges and dedupe by id.
+      const [owned, client] = await Promise.all([
+        this.graphGet<{ data: { id: string; name: string; currency: string }[] }>(
+          `${META_GRAPH_URL}/${business.id}/owned_ad_accounts`,
+          { fields: 'id,name,currency', access_token: accessToken },
+        ),
+        this.graphGet<{ data: { id: string; name: string; currency: string }[] }>(
+          `${META_GRAPH_URL}/${business.id}/client_ad_accounts`,
+          { fields: 'id,name,currency', access_token: accessToken },
+        ),
+      ]);
+
+      const adAccountsById = new Map<string, { id: string; name: string; currency: string }>();
+      for (const adAccount of [...(owned.data ?? []), ...(client.data ?? [])]) {
+        adAccountsById.set(adAccount.id, adAccount);
+      }
+      const adAccountList = Array.from(adAccountsById.values());
 
       accounts.push({
         bmId: business.id,
         bmName: business.name,
-        adAccounts: adAccounts.data ?? [],
+        adAccounts: adAccountList,
       });
 
-      for (const adAccount of adAccounts.data ?? []) {
+      for (const adAccount of adAccountList) {
         await this.prisma.connectedAccount.upsert({
           where: {
             userId_metaAccountId: { userId, metaAccountId: adAccount.id },
@@ -123,6 +139,10 @@ export class MetaService {
       }
     }
 
+    const totalAdAccounts = accounts.reduce((sum, bm) => sum + bm.adAccounts.length, 0);
+    this.logger.log(
+      `Meta connected: userId=${userId}, businessManagers=${accounts.length}, adAccounts=${totalAdAccounts}`,
+    );
     return { success: true, accounts };
   }
 
@@ -141,8 +161,12 @@ export class MetaService {
       if (!byBm.has(row.metaBmId)) {
         byBm.set(row.metaBmId, { bmId: row.metaBmId, bmName: row.metaBmName, adAccounts: [] });
       }
+      // `id` here is the ConnectedAccount row's own primary key, not Meta's
+      // account id (metaAccountId) — every other endpoint (import, ai,
+      // schedules, disconnect) looks accounts up by this DB id, so the
+      // listing must return the same id or those lookups silently 404.
       byBm.get(row.metaBmId)!.adAccounts.push({
-        id: row.metaAccountId,
+        id: row.id,
         name: row.metaAccountName,
         currency: row.currency,
       });
@@ -155,8 +179,9 @@ export class MetaService {
     const rows = await this.prisma.connectedAccount.findMany({
       where: { userId, metaBmId: bmId },
     });
+    // Same fix as listAccounts() — `id` must be the DB row id, not metaAccountId.
     return rows.map((row) => ({
-      id: row.metaAccountId,
+      id: row.id,
       name: row.metaAccountName,
       currency: row.currency,
     }));
@@ -218,6 +243,10 @@ export class MetaService {
       template.columnOrder,
       template.sortBy,
       template.sortDirection,
+    );
+
+    this.logger.log(
+      `Import completed: userId=${userId}, accountId=${account.id}, templateId=${template.id}, rows=${sortedRows.length}`,
     );
 
     return {
@@ -424,6 +453,17 @@ export class MetaService {
       const code = axios.isAxiosError(err)
         ? err.response?.data?.error?.code
         : undefined;
+
+      // Code 190 = OAuthException, the token was revoked or expired on
+      // Meta's side (e.g. user removed the app's access from Facebook
+      // settings). This is not retryable — the user must reconnect. 401 lets
+      // the frontend distinguish this from a generic import failure and
+      // prompt reconnect specifically, rather than showing a dead-end error.
+      if (code === 190) {
+        throw new UnauthorizedException(
+          'Your Meta connection expired. Click Reconnect.',
+        );
+      }
 
       if (code === 17 || code === 613) {
         await new Promise((resolve) => setTimeout(resolve, 60_000));

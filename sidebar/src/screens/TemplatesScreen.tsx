@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../hooks/useAuth';
 import { useRouter } from '../hooks/useRouter';
 import { apiClient } from '../services/api.service';
+import { EmptyState } from '../components/EmptyState';
+import { SkeletonList } from '../components/Skeleton';
 import type { Template } from '../types';
 
 export function TemplatesScreen() {
@@ -30,29 +32,39 @@ export function TemplatesScreen() {
         + New Template
       </button>
 
-      <ul className="list">
-        {(templatesQuery.data ?? []).map((t) => (
-          <li key={t.id} className="list-item">
-            <div>
-              <strong>{t.name}</strong>
-              <p className="muted small">{t.reportLevel} · {t.dateGranularity}</p>
-            </div>
-            <div className="list-item-actions">
-              <button className="btn btn-link" onClick={() => navigate('template-form', { id: t.id })}>
-                Edit
-              </button>
-              {!t.isPrebuilt && (
-                <button
-                  className="btn btn-link danger"
-                  onClick={() => deleteMutation.mutate(t.id)}
-                >
-                  Delete
+      {templatesQuery.isLoading ? (
+        <SkeletonList rows={4} />
+      ) : (templatesQuery.data ?? []).length === 0 ? (
+        <EmptyState
+          icon="template"
+          title="No templates yet"
+          description="Create a template to define which metrics and columns your reports pull."
+        />
+      ) : (
+        <ul className="list">
+          {(templatesQuery.data ?? []).map((t) => (
+            <li key={t.id} className="list-item">
+              <div>
+                <strong>{t.name}</strong>
+                <p className="muted small">{t.reportLevel} · {t.dateGranularity}</p>
+              </div>
+              <div className="list-item-actions">
+                <button className="btn btn-link" onClick={() => navigate('template-form', { id: t.id })}>
+                  Edit
                 </button>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
+                {!t.isPrebuilt && (
+                  <button
+                    className="btn btn-link danger"
+                    onClick={() => deleteMutation.mutate(t.id)}
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsObject, IsOptional, IsString, IsUUID } from 'class-validator';
 
 interface TabData {
   headers: string[];
@@ -6,8 +6,7 @@ interface TabData {
 }
 
 export class AiGenerateDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsUUID()
   accountId!: string;
 
   @IsObject()

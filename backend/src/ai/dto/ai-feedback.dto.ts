@@ -1,8 +1,7 @@
-import { IsIn, IsNotEmpty, IsString } from 'class-validator';
+import { IsIn, IsUUID } from 'class-validator';
 
 export class AiFeedbackDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsUUID()
   aiReportId!: string;
 
   @IsIn(['thumbs_up', 'thumbs_down'])

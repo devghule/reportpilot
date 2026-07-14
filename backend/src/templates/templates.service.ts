@@ -1,7 +1,6 @@
 import {
   ForbiddenException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,24 +10,17 @@ import { PREBUILT_TEMPLATES } from './prebuilt-templates';
 
 @Injectable()
 export class TemplatesService {
-  // TEMPORARY DIAGNOSTIC LOGGING — remove once the OAuth 500 is root-caused.
-  private readonly logger = new Logger(TemplatesService.name);
-
   constructor(private readonly prisma: PrismaService) {}
 
   // Seeds the 5 prebuilt templates for a user on first login.
   // Checks for existing templates before inserting — safe to call every login.
   async seedPrebuiltTemplates(userId: string) {
-    this.logger.log(`[TRACE] seedPrebuiltTemplates() — before Prisma: template.count() userId=${userId}`);
     const existing = await this.prisma.template.count({ where: { userId } });
-    this.logger.log(`[TRACE] seedPrebuiltTemplates() — after Prisma: template.count()=${existing}`);
     if (existing > 0) return;
 
-    this.logger.log('[TRACE] seedPrebuiltTemplates() — before Prisma: template.createMany()');
     await this.prisma.template.createMany({
       data: PREBUILT_TEMPLATES.map((template) => ({ ...template, userId })),
     });
-    this.logger.log('[TRACE] seedPrebuiltTemplates() — after Prisma: template.createMany()');
   }
 
   findAll(userId: string) {

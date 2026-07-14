@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import OpenAI from 'openai';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiGenerateDto } from './dto/ai-generate.dto';
@@ -19,6 +20,7 @@ interface TabData {
 
 @Injectable()
 export class AiService {
+  private readonly logger = new Logger(AiService.name);
   private openai?: OpenAI;
 
   constructor(
@@ -88,8 +90,15 @@ export class AiService {
         { timeout: 30_000 },
       );
       rawOutput = completion.choices[0]?.message?.content ?? '';
-    } catch (err: any) {
-      if (err?.name === 'APIConnectionTimeoutError' || err?.code === 'ETIMEDOUT') {
+    } catch (err: unknown) {
+      // Never log `err` directly here — the OpenAI SDK's error objects can
+      // include the request body, which would put campaign data (and
+      // potentially the API key on some error shapes) into application logs.
+      const isTimeout =
+        err instanceof Error &&
+        (err.name === 'APIConnectionTimeoutError' || (err as { code?: string }).code === 'ETIMEDOUT');
+      this.logger.warn(`AI generation failed for account ${account.id}${isTimeout ? ' (timeout)' : ''}`);
+      if (isTimeout) {
         throw new BadRequestException('Analysis is taking longer than expected. Please try again.');
       }
       throw new BadRequestException('AI insights are unavailable right now. Try again in a few minutes.');
@@ -102,11 +111,12 @@ export class AiService {
         userId,
         accountId: account.id,
         accountName: account.metaAccountName,
-        reportData: dto.reportData as any,
+        reportData: dto.reportData as unknown as Prisma.InputJsonValue,
         promptUsed: prompt,
         insightOutput: rawOutput,
       },
     });
+    this.logger.log(`AI insight ${aiReport.id} generated for account ${account.id}`);
 
     return {
       id: aiReport.id,

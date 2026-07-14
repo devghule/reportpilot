@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../hooks/useAuth';
 import { useRouter } from '../hooks/useRouter';
 import { apiClient } from '../services/api.service';
+import { EmptyState } from '../components/EmptyState';
+import { SkeletonList } from '../components/Skeleton';
 import type { Schedule } from '../types';
 
 export function SchedulesScreen() {
@@ -33,8 +35,16 @@ export function SchedulesScreen() {
     onSuccess: invalidate,
   });
 
-  const statusLabel = (status: string) =>
-    status === 'active' ? 'Active' : status === 'paused' ? 'Paused' : 'Failed';
+  // `status` is only ever active | paused | disabled per the schema — a
+  // genuine run failure lives in `lastRunStatus`, not `status`. The old
+  // version treated anything not active/paused as "Failed", but a failed
+  // *schedule* still has status='active' after retries, so it always
+  // rendered as a plain green "Active" badge with no failure signal at all.
+  const displayStatus = (s: Schedule): { label: string; className: string } => {
+    if (s.status === 'paused') return { label: 'Paused', className: 'badge-paused' };
+    if (s.lastRunStatus === 'failed') return { label: 'Failed', className: 'badge-disabled' };
+    return { label: 'Active', className: 'badge-active' };
+  };
 
   return (
     <div className="screen">
@@ -47,31 +57,47 @@ export function SchedulesScreen() {
         + New Schedule
       </button>
 
-      <ul className="list">
-        {(schedulesQuery.data ?? []).map((s) => (
-          <li key={s.id} className="list-item schedule-card">
-            <div>
-              <strong>{s.template?.name ?? 'Template'}</strong>
-              <span className={`badge badge-${s.status}`}>{statusLabel(s.status)}</span>
-            </div>
-            <p className="muted small">
-              {s.account?.metaAccountName ?? 'Account'} · {s.frequency} at {s.refreshTime}
-            </p>
-            <p className="muted small">Last run: {s.lastRunDisplay ?? 'Never'}</p>
-            <p className="muted small">Next run: {s.nextRunDisplay ?? '—'}</p>
-            <div className="list-item-actions">
-              {s.status === 'active' ? (
-                <button className="btn btn-link" onClick={() => pauseMutation.mutate(s.id)}>Pause</button>
-              ) : (
-                <button className="btn btn-link" onClick={() => resumeMutation.mutate(s.id)}>Resume</button>
-              )}
-              <button className="btn btn-link" onClick={() => runNowMutation.mutate(s.id)}>Run Now</button>
-              <button className="btn btn-link" onClick={() => navigate('schedule-form', { id: s.id })}>Edit</button>
-              <button className="btn btn-link danger" onClick={() => deleteMutation.mutate(s.id)}>Delete</button>
-            </div>
-          </li>
-        ))}
-      </ul>
+      {schedulesQuery.isLoading ? (
+        <SkeletonList rows={3} />
+      ) : (schedulesQuery.data ?? []).length === 0 ? (
+        <EmptyState
+          icon="schedule"
+          title="No schedules yet"
+          description="Set up a schedule to have reports refresh automatically."
+        />
+      ) : (
+        <ul className="list">
+          {(schedulesQuery.data ?? []).map((s) => {
+            const status = displayStatus(s);
+            return (
+            <li key={s.id} className="list-item schedule-card">
+              <div>
+                <strong>{s.template?.name ?? 'Template'}</strong>
+                <span className={`badge ${status.className}`}>{status.label}</span>
+              </div>
+              <p className="muted small">
+                {s.account?.metaAccountName ?? 'Account'} · {s.frequency} at {s.refreshTime}
+              </p>
+              <p className="muted small">
+                Last run: {s.lastRunDisplay ?? 'Never'}
+                {s.lastRunStatus === 'failed' && s.lastError ? ` — ${s.lastError}` : ''}
+              </p>
+              <p className="muted small">Next run: {s.nextRunDisplay ?? '—'}</p>
+              <div className="list-item-actions">
+                {s.status === 'active' ? (
+                  <button className="btn btn-link" onClick={() => pauseMutation.mutate(s.id)}>Pause</button>
+                ) : (
+                  <button className="btn btn-link" onClick={() => resumeMutation.mutate(s.id)}>Resume</button>
+                )}
+                <button className="btn btn-link" onClick={() => runNowMutation.mutate(s.id)}>Run Now</button>
+                <button className="btn btn-link" onClick={() => navigate('schedule-form', { id: s.id })}>Edit</button>
+                <button className="btn btn-link danger" onClick={() => deleteMutation.mutate(s.id)}>Delete</button>
+              </div>
+            </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

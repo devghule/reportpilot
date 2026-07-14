@@ -10,6 +10,7 @@ import {
 import type { Response } from 'express';
 import { MetaService } from './meta.service';
 import { MetaImportDto } from './dto/meta-import.dto';
+import { MetaDisconnectDto } from './dto/meta-disconnect.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/guards/jwt-auth.guard';
@@ -66,10 +67,7 @@ export class MetaController {
 
   @Post('disconnect')
   @UseGuards(JwtAuthGuard)
-  disconnect(
-    @CurrentUser() currentUser: JwtPayload,
-    @Body('accountId') accountId: string,
-  ) {
-    return this.metaService.disconnect(currentUser.userId, accountId);
+  disconnect(@CurrentUser() currentUser: JwtPayload, @Body() dto: MetaDisconnectDto) {
+    return this.metaService.disconnect(currentUser.userId, dto.accountId);
   }
 }

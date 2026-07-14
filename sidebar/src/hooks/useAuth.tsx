@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import axios from 'axios';
 import { runScript } from '../utils/appscript';
 import { apiClient } from '../services/api.service';
 import type { User } from '../types';
@@ -27,10 +28,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { data } = await apiClient(t).get<User>('/auth/me');
       setUser(data);
-    } catch {
-      setUser(null);
-      setTokenState(null);
-      await runScript('clearToken').catch(() => undefined);
+    } catch (err) {
+      // Only a genuine 401 means the token is actually invalid/expired —
+      // any other failure (network blip, temporary 500) should NOT throw
+      // away a still-valid persisted session. Previously any error here
+      // cleared the token, forcing a fresh Google login on transient issues.
+      const isUnauthorized = axios.isAxiosError(err) && err.response?.status === 401;
+      if (isUnauthorized) {
+        setUser(null);
+        setTokenState(null);
+        await runScript('clearToken').catch(() => undefined);
+      }
+      // Non-401: keep the token as-is. The next successful call will
+      // populate `user` again; the UI can retry rather than re-auth.
     }
   };
 

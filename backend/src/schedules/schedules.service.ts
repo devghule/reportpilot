@@ -40,10 +40,22 @@ export class SchedulesService {
   // CRUD
   // ---------------------------------------------------------------------
 
+  // Selecting instead of including the full related rows — `account`
+  // otherwise carries the encrypted Meta accessToken and Google refresh
+  // token straight to the client. The frontend only ever reads account
+  // name/currency and template name, so there's no reason those ciphertext
+  // blobs should leave the server at all.
+  private readonly scheduleListArgs = {
+    include: {
+      template: { select: { id: true, name: true, reportLevel: true } },
+      account: { select: { id: true, metaAccountName: true, currency: true } },
+    },
+  } as const;
+
   async findAll(userId: string) {
     const schedules = await this.prisma.schedule.findMany({
       where: { userId },
-      include: { template: true, account: true },
+      ...this.scheduleListArgs,
     });
     return schedules.map((schedule) => ({
       ...schedule,
@@ -52,23 +64,76 @@ export class SchedulesService {
     }));
   }
 
+  // Verifies templateId/accountId in a schedule DTO actually belong to this
+  // user before touching the DB. Without this, create() would happily
+  // reference another user's template/account (Prisma's FK constraint only
+  // checks the row exists, not who owns it) — the schedule would then just
+  // fail silently at execution time instead of erroring clearly right away.
+  private async assertOwnsScheduleInputs(
+    userId: string,
+    templateId?: string,
+    accountId?: string,
+  ): Promise<void> {
+    if (templateId) {
+      const template = await this.prisma.template.findFirst({
+        where: { id: templateId, userId },
+        select: { id: true },
+      });
+      if (!template) {
+        throw new NotFoundException('Template not found.');
+      }
+    }
+    if (accountId) {
+      const account = await this.prisma.connectedAccount.findFirst({
+        where: { id: accountId, userId },
+        select: { id: true },
+      });
+      if (!account) {
+        throw new NotFoundException('Connected account not found.');
+      }
+    }
+  }
+
   async create(userId: string, dto: CreateScheduleDto) {
+    await this.assertOwnsScheduleInputs(userId, dto.templateId, dto.accountId);
+
     const nextRunAt = this.calculateNextRun({
       frequency: dto.frequency,
       refreshTime: dto.refreshTime,
       timezone: dto.timezone,
     });
 
-    return this.prisma.schedule.create({
+    const schedule = await this.prisma.schedule.create({
       data: { ...dto, userId, nextRunAt },
     });
+    this.logger.log(`Schedule ${schedule.id} created for user ${userId} (${dto.frequency} at ${dto.refreshTime})`);
+    return schedule;
   }
 
   async update(userId: string, id: string, dto: UpdateScheduleDto) {
     const schedule = await this.findOwned(userId, id);
+    await this.assertOwnsScheduleInputs(userId, dto.templateId, dto.accountId);
+
+    // nextRunAt was never recalculated here — editing an active schedule's
+    // time/frequency/timezone silently kept firing at the OLD time until it
+    // happened to pass once and get recomputed naturally. Recompute whenever
+    // any of the three inputs to calculateNextRun changed.
+    const scheduleAffectingFieldsChanged =
+      (dto.frequency !== undefined && dto.frequency !== schedule.frequency) ||
+      (dto.refreshTime !== undefined && dto.refreshTime !== schedule.refreshTime) ||
+      (dto.timezone !== undefined && dto.timezone !== schedule.timezone);
+
+    const nextRunAt = scheduleAffectingFieldsChanged
+      ? this.calculateNextRun({
+          frequency: dto.frequency ?? schedule.frequency,
+          refreshTime: dto.refreshTime ?? schedule.refreshTime,
+          timezone: dto.timezone ?? schedule.timezone,
+        })
+      : undefined;
+
     return this.prisma.schedule.update({
       where: { id: schedule.id },
-      data: dto,
+      data: { ...dto, ...(nextRunAt ? { nextRunAt } : {}) },
     });
   }
 
@@ -166,6 +231,9 @@ export class SchedulesService {
           nextRunAt: this.calculateNextRun(schedule),
         },
       });
+      this.logger.log(
+        `Schedule ${schedule.id} executed successfully (${data.rows.length} rows written to "${schedule.sheetTabName}")`,
+      );
     } catch (error) {
       await this.handleFailure(schedule, error);
     }

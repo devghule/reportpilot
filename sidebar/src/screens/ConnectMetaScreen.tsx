@@ -3,6 +3,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useRouter } from '../hooks/useRouter';
 import { apiClient } from '../services/api.service';
 import { openOAuthPopup } from '../utils/popup';
+import { getErrorMessage } from '../utils/errorMessage';
 import type { BusinessManagerGroup } from '../types';
 
 export function ConnectMetaScreen() {
@@ -22,7 +23,7 @@ export function ConnectMetaScreen() {
       );
       navigate('home');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not connect Meta account.');
+      setError(getErrorMessage(err, 'Could not connect Meta account.'));
     } finally {
       setLoading(false);
     }

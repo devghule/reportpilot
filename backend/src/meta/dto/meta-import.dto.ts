@@ -1,23 +1,19 @@
 import { Type } from 'class-transformer';
-import { IsNotEmpty, IsString, ValidateNested } from 'class-validator';
+import { IsUUID, Matches, ValidateNested } from 'class-validator';
 
 class DateRangeDto {
-  @IsString()
-  @IsNotEmpty()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'since must be in YYYY-MM-DD format' })
   since!: string;
 
-  @IsString()
-  @IsNotEmpty()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'until must be in YYYY-MM-DD format' })
   until!: string;
 }
 
 export class MetaImportDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsUUID()
   templateId!: string;
 
-  @IsString()
-  @IsNotEmpty()
+  @IsUUID()
   accountId!: string;
 
   @ValidateNested()
