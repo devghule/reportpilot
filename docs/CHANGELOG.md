@@ -14,6 +14,9 @@ for this project.
 - CI: GitHub Actions workflow running lint/typecheck/build for backend and sidebar on every push/PR.
 - `sidebar/.env.development` (committed) so `npm run dev` works against a local backend with zero manual setup.
 
+### Fixed
+- `prisma migrate deploy` hanging indefinitely against Supabase's transaction pooler — the Prisma CLI (`prisma.config.ts`) now connects via `DIRECT_URL` for migrations, while the running app continues to use `DATABASE_URL` (the pooler) for all runtime queries. `DIRECT_URL` is now a required env var wherever Prisma CLI commands run (see `KNOWN_ISSUES.md`).
+
 ## [0.1.0] — 2026-07-14 (baseline)
 
 First versioned snapshot, retroactively covering everything built before

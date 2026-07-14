@@ -36,7 +36,7 @@ build/start commands, not this file.
 Set every variable from `backend/.env.example` in the Render dashboard, with
 production values:
 
-- `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY` — same Supabase project as local dev, or a separate production project (recommended once you have real users — see ROADMAP).
+- `DATABASE_URL` (transaction pooler, port 6543 — runtime queries), `DIRECT_URL` (direct connection, port 5432 — required for `prisma migrate`, see below), `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY` — same Supabase project as local dev, or a separate production project (recommended once you have real users — see ROADMAP).
 - `GOOGLE_REDIRECT_URI` = `https://<your-render-url>/auth/google/callback`
 - `META_REDIRECT_URI` = `https://<your-render-url>/meta/callback`
 - `BACKEND_URL` = `https://<your-render-url>`
@@ -53,8 +53,15 @@ change that includes a new Prisma migration:
 
 ```bash
 cd backend
-DATABASE_URL="<production DATABASE_URL>" npx prisma migrate deploy
+DIRECT_URL="<production DIRECT_URL>" npx prisma migrate deploy
 ```
+
+Use `DIRECT_URL` (the direct connection, port 5432), not `DATABASE_URL` —
+Supabase's transaction pooler doesn't support the advisory locks `migrate
+deploy` takes, and it will hang indefinitely against it. `prisma.config.ts`
+already points the CLI at `DIRECT_URL` by default, so as long as it's set in
+your shell this just works; the explicit env var above is a safety net in
+case it isn't exported.
 
 Run this manually, before or immediately after the Render deploy that ships
 the corresponding code — a schema/code mismatch window is otherwise

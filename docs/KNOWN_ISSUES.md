@@ -4,6 +4,25 @@ Issues discovered while auditing the codebase for this engineering pass.
 None of these are fixed here (out of scope — no product/behavior changes),
 but they're documented so they don't get rediscovered from scratch later.
 
+## Resolved
+
+### `prisma migrate deploy` hung against the Supabase transaction pooler
+
+**Fixed.** `backend/prisma.config.ts` previously pointed the Prisma CLI's
+`datasource.url` at `DATABASE_URL` (the transaction pooler, port 6543).
+Supabase's pooler (Supavisor) doesn't support the advisory locks `migrate
+deploy`/`migrate dev` take, so it hung indefinitely instead of failing
+clearly. Runtime queries were never affected — `PrismaService` connects
+independently via its own adapter, always using `DATABASE_URL` directly.
+
+Fix: `prisma.config.ts` now points `datasource.url` at `DIRECT_URL` (a
+direct/non-pooled connection, port 5432), falling back to `DATABASE_URL`
+only if `DIRECT_URL` is unset. `DIRECT_URL` must be set in every environment
+that runs Prisma CLI commands (local dev, CI if it ever runs migrations,
+and whenever you run `migrate deploy` against production) — see
+[LOCAL_DEV.md](LOCAL_DEV.md#database) and
+[DEPLOYMENT.md](DEPLOYMENT.md#database-migrations).
+
 ## Confirmed (verified in code)
 
 ### Deleting a Meta account or template in use by a schedule fails ungracefully

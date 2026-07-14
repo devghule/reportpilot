@@ -8,7 +8,17 @@ export default defineConfig({
   migrations: {
     path: "prisma/migrations",
   },
+  // The Prisma CLI (migrate deploy/dev, db pull, studio) needs a direct
+  // session connection — it runs advisory locks and DDL that Supabase's
+  // transaction pooler (Supavisor, port 6543) doesn't support, which is why
+  // `migrate deploy` against DATABASE_URL hangs. DIRECT_URL must point at
+  // Supabase's direct/session connection (port 5432).
+  //
+  // This only affects the CLI. The running app never reads this file — it
+  // connects at runtime via PrismaService's own adapter (prisma/prisma.service.ts),
+  // which is hardcoded to DATABASE_URL (the pooler), so request-time
+  // connections are unaffected by this change.
   datasource: {
-    url: process.env["DATABASE_URL"],
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });

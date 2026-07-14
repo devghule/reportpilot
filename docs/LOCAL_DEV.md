@@ -49,8 +49,8 @@ cp .env.example .env
 
 | Variable | Where it comes from |
 |---|---|
-| `DATABASE_URL` | Supabase → Settings → Database → Connection string (pooling URI) |
-| `DIRECT_URL` | Optional, see comment in `.env.example` |
+| `DATABASE_URL` | Supabase → Settings → Database → Connection string → "Transaction pooler" URI (port 6543) — used at runtime |
+| `DIRECT_URL` | Supabase → Settings → Database → Connection string → "Direct connection" URI (port 5432) — used only by the Prisma CLI (`migrate`, `db pull`, `studio`); required, see comment in `.env.example` |
 | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY` | Supabase → Settings → API |
 | `META_APP_ID`, `META_APP_SECRET`, `META_REDIRECT_URI` | Meta App dashboard (see below) |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | Google Cloud Console (see below) |
@@ -74,13 +74,19 @@ do unless your backend runs on a different port.
 ## Database
 
 Prisma manages the schema (`backend/prisma/schema.prisma`). After setting
-`DATABASE_URL`:
+both `DATABASE_URL` and `DIRECT_URL`:
 
 ```bash
 cd backend
-npx prisma migrate deploy   # apply existing migrations to your Supabase DB
+npx prisma migrate deploy   # apply existing migrations to your Supabase DB (uses DIRECT_URL)
 npx prisma generate         # regenerate the client (also runs automatically via postinstall)
 ```
+
+`migrate deploy`/`migrate dev` read `DIRECT_URL`, not `DATABASE_URL` (see
+`backend/prisma.config.ts`) — Supabase's transaction pooler doesn't support
+the advisory locks migrations need, and using it here will just hang. The
+app itself still connects at runtime via `DATABASE_URL` (the pooler); this
+only affects CLI commands.
 
 To create a new migration after changing `schema.prisma`:
 
@@ -105,7 +111,8 @@ See [TEST_CHECKLIST.md](TEST_CHECKLIST.md) for the manual QA checklist covering 
 1. Go to https://supabase.com → New project.
 2. Once created, go to **Settings → Database → Connection string** and copy the URI (pooling, port 6543) → this is `DATABASE_URL`.
 3. Go to **Settings → API** and copy the **Project URL**, **anon public key**, and **service_role secret key** → `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`.
-4. Run `npx prisma migrate deploy` from `backend/` (with `DATABASE_URL` set) to create the schema.
+4. Also copy the **Direct connection** URI (port 5432, same page) → `DIRECT_URL`.
+5. Run `npx prisma migrate deploy` from `backend/` (with both `DATABASE_URL` and `DIRECT_URL` set) to create the schema.
 
 ## Manual step: Google Cloud
 
