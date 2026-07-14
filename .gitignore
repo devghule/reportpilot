@@ -5,6 +5,8 @@ node_modules/
 .env
 .env.*
 !.env.example
+# Non-secret, committed default for `sidebar` local dev (see LOCAL_DEV.md)
+!sidebar/.env.development
 
 # Build output
 dist/

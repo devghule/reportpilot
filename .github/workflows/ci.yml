@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (lint, typecheck, build, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      # Non-blocking: pre-existing lint debt (see KNOWN_ISSUES.md) means this
+      # currently reports failures without blocking the pipeline. Flip to
+      # blocking (remove continue-on-error) once that debt is cleared.
+      - run: npm run lint
+        continue-on-error: true
+      - run: npx tsc --noEmit
+      - run: npm run build
+      - run: npm test
+
+  sidebar:
+    name: Sidebar (lint, typecheck, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sidebar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: sidebar/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+        continue-on-error: true
+      - run: npm run build
